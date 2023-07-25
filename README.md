@@ -72,6 +72,14 @@ Our model is based on [DINO](https://arxiv.org/abs/2203.03605).
 # Bibtex
 If you find our work helpful for your research, please consider citing the following BibTeX entry.   
 ```bibtex
+@misc{zhang2022dino,
+      title={DINO: DETR with Improved DeNoising Anchor Boxes for End-to-End Object Detection}, 
+      author={Hao Zhang and Feng Li and Shilong Liu and Lei Zhang and Hang Su and Jun Zhu and Lionel M. Ni and Heung-Yeung Shum},
+      year={2022},
+      eprint={2203.03605},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
+}
 @article{hao2023language,
   title={Language-aware Multiple Datasets Detection Pretraining for DETRs},
   author={Hao, Jing and Chen, Song and Wang, Xiaodi and Han, Shumin},
