@@ -1,6 +1,6 @@
 # METR 
 
-This is the official implementation of the paper "[Language-aware Multiple Datasets Detection Pretraining for DETRs]([https://arxiv.org/abs/2203.03605](https://arxiv.org/abs/2304.03580))". 
+This is the official implementation of the paper "[Language-aware Multiple Datasets Detection Pretraining for DETRs](https://arxiv.org/abs/2304.03580)". 
 
 Authors: Jing Hao*, Song Chen*, Xiaodi Wang, Shumin Han
 
