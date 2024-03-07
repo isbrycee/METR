@@ -29,7 +29,7 @@ pip install -r requirements.txt
 
 4. Compiling CUDA operators
 ```sh
-cd models/dino/ops
+cd models/metr/ops
 python setup.py build install
 # unit test (should see all checking is True)
 python test.py
