@@ -2,20 +2,163 @@
 """
 Train and eval functions used in main.py
 """
+from fileinput import filename
+import json
 import math
 import os
 import sys
+from traceback import print_tb
 from typing import Iterable
 import numpy as np
-
+from util import box_ops
+from torchvision.ops import nms
 from util.utils import slprint, to_device
-
 import torch
-
 import util.misc as utils
 from datasets.coco_eval import CocoEvaluator
 from datasets.panoptic_eval import PanopticEvaluator
+from torch import Tensor
 
+
+def jitter_boxes(boxes, jitter_range=0.005):
+    jitter = jitter_range * (boxes[:, 2:].max(dim=1).values[0])
+
+    dx = torch.randn_like(boxes[:, :1]) * jitter
+    dy = torch.randn_like(boxes[:, 1:2]) * jitter
+    dw = torch.randn_like(boxes[:, 2:3]) * jitter
+    dh = torch.randn_like(boxes[:, 3:]) * jitter
+
+    # 对目标框进行抖动
+    jittered_boxes = torch.cat((boxes[:, :1] + dx, boxes[:, 1:2] + dy, boxes[:, 2:3] + dw, boxes[:, 3:] + dh), dim=1)
+
+    return jittered_boxes
+
+def box_area(boxes: Tensor) -> Tensor:
+    """
+    Computes the area of a set of bounding boxes, which are specified by its
+    (x1, y1, x2, y2) coordinates.
+    Arguments:
+        boxes (Tensor[N, 4]): boxes for which the area will be computed. They
+            are expected to be in (x1, y1, x2, y2) format
+    Returns:
+        area (Tensor[N]): area for each box
+    """
+    return (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+ 
+ 
+def box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
+    """
+    Return intersection-over-union (Jaccard index) of boxes.
+    Both sets of boxes are expected to be in (x1, y1, x2, y2) format.
+    Arguments:
+        boxes1 (Tensor[N, 4])
+        boxes2 (Tensor[M, 4])
+    Returns:
+        iou (Tensor[N, M]): the NxM matrix containing the pairwise IoU values for every element in boxes1 and boxes2
+    """
+    area1 = box_area(boxes1)  # 每个框的面积 (N,)
+    area2 = box_area(boxes2)  # (M,)
+ 
+    lt = torch.max(boxes1[:, None, :2], boxes2[:, :2])  # [N,M,2] # N中一个和M个比较； 所以由N，M 个
+    rb = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])  # [N,M,2]
+ 
+    wh = (rb - lt).clamp(min=0)  # [N,M,2]  #小于0的为0  clamp 钳；夹钳；
+    inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]  
+ 
+    iou = inter / (area1[:, None] + area2 - inter)
+    return iou  # NxM， boxes1中每个框和boxes2中每个框的IoU值；
+ 
+ 
+def nms(boxes: Tensor, scores: Tensor, iou_threshold: float):
+    """
+    :param boxes: [N, 4]， 此处传进来的框，是经过筛选（NMS之前选取过得分TopK）之后， 在传入之前处理好的；
+    :param scores: [N]
+    :param iou_threshold: 0.7
+    :return:
+    """
+    keep = []  # 最终保留的结果， 在boxes中对应的索引；
+    valid_keep = []
+    idxs = scores.argsort()  # 值从小到大的 索引
+    while idxs.numel() > 0:  # 循环直到null； numel()： 数组元素个数
+        # 得分最大框对应的索引, 以及对应的坐标
+        max_score_index = idxs[-1]
+        max_score_box = boxes[max_score_index][None, :]  # [1, 4]
+        keep.append(max_score_index)
+        if idxs.size(0) == 1:  # 就剩余一个框了；
+            break
+        idxs = idxs[:-1]  # 将得分最大框 从索引中删除； 剩余索引对应的框 和 得分最大框 计算IoU；
+        other_boxes = boxes[idxs]  # [?, 4]
+        ious = box_iou(max_score_box, other_boxes)  # 一个框和其余框比较 1XM
+        idxs = idxs[ious[0] <= iou_threshold]
+ 
+    condition = ((boxes[:, 0] > boxes[:, 2]) | (boxes[:, 1] > boxes[:, 3]))
+    indices = torch.nonzero(condition).squeeze()
+    
+    for ind in keep:
+        if ind.item() not in indices:
+            valid_keep.append(ind)
+    keep = idxs.new(valid_keep)  # Tensor
+
+    saved_boxes = boxes[keep]
+    return keep, saved_boxes
+
+def generate_psudou_bbox(outputs, targers, class_index, score_thresh=0.90, iou_threshold=0.90):
+    src_logits = outputs['pred_logits']
+    device = src_logits.device
+    src_score = src_logits.sigmoid()
+    src_saved_idx = (src_score > score_thresh).nonzero()
+    if len(src_saved_idx) == 0:
+        return targers
+    src_saved_class_id = class_index[src_saved_idx[:, 0]]
+    
+    src_saved_scores = src_score[src_saved_idx[:, 0], src_saved_idx[:, 1]]
+    src_boxes = outputs['pred_boxes']
+    src_saved_boxes = src_boxes[src_saved_idx[:, 0], src_saved_idx[:, 1], :]
+    
+    src_saved_boxes_xyxy = box_ops.box_cxcywh_to_xyxy(src_saved_boxes)
+    img_w, img_h = targers[0]['size'][0].item(), targers[0]['size'][1].item()
+    scale_fct = torch.Tensor([img_w, img_h, img_w, img_h]).to(device)
+    src_saved_boxes_xyxy_ori = src_saved_boxes_xyxy * scale_fct
+    
+    # nms
+    keep, kept_bboxes_xyxy = nms(src_saved_boxes_xyxy_ori, src_saved_scores, iou_threshold)
+    kept_bboxes = src_saved_boxes[keep]
+    kept_bboxes = jitter_boxes(kept_bboxes)
+    kept_bboxes_xyxy = box_ops.box_cxcywh_to_xyxy(kept_bboxes)
+
+    src_saved_idx = src_saved_idx[keep]
+    src_src_saved_boxes_wh = targers[0]['size'] * kept_bboxes_xyxy[:, 2:]
+    src_src_saved_boxes_areas = torch.prod(src_src_saved_boxes_wh, dim=-1)
+    kept_label = src_saved_class_id[keep]
+
+    bs = len(targers)
+    assert bs == 1
+    for i in range(bs):
+        boxes = targers[i]['boxes']
+        combined_boxes = torch.cat((boxes, kept_bboxes), dim=0)
+        targers[i]['boxes'] = combined_boxes.detach()
+
+        labels = targers[i]['labels']
+        combined_labels = torch.cat((labels, kept_label), dim=0)
+        targers[i]['labels'] = combined_labels.detach()
+
+        area = targers[i]['area']
+        combined_area = torch.cat((area, src_src_saved_boxes_areas), dim=0)
+        targers[i]['area'] = combined_area.detach()
+
+        iscrowd = targers[i]['iscrowd']
+        combined_iscrowd = torch.zeros_like(combined_labels)
+        targers[i]['iscrowd'] = combined_iscrowd.detach()
+
+        multi_label_onehot = targers[i]['multi_label_onehot']
+        combined_multi_label_onehot = multi_label_onehot.scatter_(0, kept_label, 1)
+        targers[i]['multi_label_onehot'] = combined_multi_label_onehot.detach()
+
+        class_label = targers[i]['class_label']
+        combined_class_label = torch.unique(torch.cat((class_label, kept_label)))
+        targers[i]['class_label'] = combined_class_label.detach()
+
+    return targers
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, criterion_for_encoder: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
@@ -69,8 +212,13 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, criterio
                 outputs,prompt_indicator_loss_dict = model(samples, targets, target_for_class)
             else:
                 outputs,prompt_indicator_loss_dict = model(samples, target_for_class = target_for_class)
-        
+            
+            if args.pseudo_boxes and epoch > 6:
+                class_index = outputs['class_index']
+                targets = generate_psudou_bbox(outputs, targets, class_index, args.thresh_pseudo_boxes)
+
             loss_dict = criterion(outputs, targets, target_for_class)
+            
             if criterion_for_encoder is not None:
                 loss_dict_encoder = criterion_for_encoder(outputs, targets, target_for_class)
                 loss_dict.update(loss_dict_encoder)
@@ -79,6 +227,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, criterio
             if prompt_indicator_loss_dict:
                 loss_dict.update(prompt_indicator_loss_dict)
                 weight_dict.update({'cls_asl':args.cls_asl_loss_weight, 'cls_asl_0':args.cls_asl_loss_weight})
+                weight_dict.update({'cls_bce':args.cls_asl_loss_weight, 'cls_bec_0':args.cls_asl_loss_weight})
             losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
         # reduce losses over all GPUs for logging purposes
@@ -177,8 +326,8 @@ def evaluate(model, criterion, criterion_for_encoder, postprocessors, data_loade
         
     print('######args.two_stage_type########', args.two_stage_type)
     print('######args.use_dn########', args.use_dn)
-    print('######args.with_prompt_indicator########', args.with_prompt_indicator)
-    print('######args.with_objseq########', args.with_objseq)
+    print('######args.is_prompt_indicator########', args.is_prompt_indicator)
+    print('######args.is_embedding_align########', args.is_embedding_align)
     print('######args.batch_size########', args.batch_size)
     print('######args.cls_loss_coef########', args.cls_loss_coef)
     print('######args.num_queries########', args.num_queries)
@@ -189,7 +338,7 @@ def evaluate(model, criterion, criterion_for_encoder, postprocessors, data_loade
     print('######args.param_dict_type########', args.param_dict_type)
     print('######args.text_embed_type########', args.text_embed_type)
     print('######args.eval_map_type########', args.eval_map_type)
-    print('######args.use_plain_TI########', args.use_plain_TI)
+    print('######args.use_plain_CEM########', args.use_plain_CEM)
     print('######args.cls_asl_loss_weight########', args.cls_asl_loss_weight)
     print('######args.dataset_type########', args.dataset_type)
     assert isinstance(args.use_dn, bool)

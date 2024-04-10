@@ -47,7 +47,7 @@ def get_args_parser():
                         help='add some notes to the experiment')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
-    parser.add_argument('--seed', default=42, type=int)
+    parser.add_argument('--seed', default=525, type=int) # 42
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--pretrain_model_path', help='load from other checkpoint')
     parser.add_argument('--finetune_ignore', type=str, nargs='+')
@@ -94,7 +94,8 @@ def get_args_parser():
     parser.add_argument('--prompt_indicator_return_intermediate', action='store_false')
     parser.add_argument('--prompt_indicator_level_preserve', default=[])
     parser.add_argument('--prompt_indicator_no_self_attn', action='store_false')
-    
+    parser.add_argument('--prompt_indicator_self_attn_dropout', default=0.5)
+
     parser.add_argument('--classifier_type', default='dict')
     parser.add_argument('--classifier_hidden_dim', default=256, type=int)
     parser.add_argument('--classifier_num_layers', default=2)
@@ -107,7 +108,7 @@ def get_args_parser():
     parser.add_argument('--retention_policy_train_class_thr', default=0.0)
     parser.add_argument('--retention_policy_eval_class_thr', default=0.0)
     
-    parser.add_argument('--prompt_indicator_losses', default=['asl'])
+    parser.add_argument('--prompt_indicator_losses', default=['asl', ]) # 'bce'
     parser.add_argument('--prompt_indicator_asl_optimized', action='store_false')
     parser.add_argument('--prompt_indicator_asl_gamma_pos', default=0.0)
     parser.add_argument('--prompt_indicator_asl_gamma_neg', default=2.0)
@@ -118,7 +119,10 @@ def get_args_parser():
     parser.add_argument('--class_normalization', default="num_box")
     parser.add_argument('--box_normalization', default="num_box")
     
- 
+    # for pseudo_boxes supervised
+    parser.add_argument('--pseudo_boxes', action='store_true')
+    parser.add_argument('--thresh_pseudo_boxes', type=float, default=0.1)
+
     return parser
 
 
