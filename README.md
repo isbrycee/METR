@@ -2,7 +2,7 @@
 
 This is the official implementation of the paper "[Language-aware Multiple Datasets Detection Pretraining for DETRs](https://arxiv.org/abs/2304.03580)". 
 
-Authors: Jing Hao*, Song Chen*, Shumin Han
+Authors: Jing Hao*, Song Chen*
 
 ## Installation
 We use the environment same to DINO to run METR. If you have run DN-DETR or DAB-DETR or DINO, you can skip this step.
